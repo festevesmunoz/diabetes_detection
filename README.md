@@ -4,7 +4,7 @@
 
 "This data set is originally from the National Institute of Diabetes and Digestive and Kidney Diseases. Several constraints were placed on the selection of these instances from a larger database. In particular, all patients here are females at least 21 years old of Pima Indian heritage." 
 
-The aim of this repository, is to show the whole path from getting the raw data into preprocessing, EDA, some unsupervised classification methods and dimension reduction methods and lastly some basic methods for supervised classification with hyper parameter tuning.
+The aim of this repository, is to show the whole path from getting the raw data into preprocessing, EDA, some unsupervised classification methods and dimension reduction methods and lastly some basic methods for supervised classification with hyper parameter tuning. **plus: a bayesian generalized linear model is used to classify the data using MCMCpack**
 
 Columns Description:
 
