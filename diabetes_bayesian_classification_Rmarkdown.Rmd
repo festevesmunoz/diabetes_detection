@@ -1,0 +1,201 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(mice)
+library(MCMCpack)
+library(coarseDataTools)
+library(MASS)
+set.seed(42)
+```
+
+# Bayesian Analysis
+
+We realize that the output of `MCMClogit` function used for fitting a Bayesian logistic regression are the posterior samples of the model parameters with MCMC class. Therefore, we will not use the DIC for comparing the fitted models in this paradigm since it is difficult with our output. Instead, we are going to use the insights that we got in the Frequentist analysis. Hence, we will use the predictors of the best frequentist model **freq_glm_step** based on their AIC.
+
+## Non-informative prior
+
+Firstly we set 120000 iterations for the sampling. We have also decided to use a burning of 30000 iterations to give the Markov Chain time to reach its stationary distribution. Additionally, we use a thinning of 30 to avoid autocorrelation between the successive samples in the MCMC resultant sample and we will obtain samples of 4000 values. 
+
+We begin assigning non-informative priors for the model parameters by fixing priori Normal distributions with zero mean and very small precision. The precision is referred the inverse of the variance.
+
+```{r}
+n_iter <- 120000
+thinning <- 30
+burning <- 30000
+#No informative prior
+glm.bayes <- MCMClogit(Outcome ~ Pregnancies + Glucose + Insulin + BMI +  DiabetesPedigreeFunction,
+                      data=diabetes_train,
+                      thin=thinning,
+                      mcmc=n_iter,
+                      burnin=burning,
+                      b0 = 0,
+                      B0 = 0.00001)
+
+```
+
+In order to check the performance of the MCMC chains of the posterior draws, we check the trace plot and the ACF for each parameter sample. We also plot the accumulated mean of each parameter to show the evolution of each mean value.
+
+```{r,fig.asp=0.5}
+par(mfrow = c(1,2))
+
+var <- c('Intercept','Pregnancies','Glucose','Insulin','BMI','DiabetesPedigreeFunction')
+mcmc_var <- rep(0,n_iter/thinning)
+for (i in 1:6){
+mcmc_var <- glm.bayes[,i]
+ts.plot(mcmc_var,main=paste("Trace plot of ",var[i]))
+acf(mcmc_var)
+ts.plot(cumsum(mcmc_var)/c(1:(n_iter/thinning)),main=paste("Mean of ",var[i]))
+}
+```
+
+We can observe in the former graphs that for each parameter the trace plots resemble to be white noise and the ACF values for almost all the lags are no significant because they lie between the blue dashed lines. We also notice that after some iterations the mean values stabilize.
+
+```{r,fig.asp=0.5}
+par(mfrow = c(1,2))
+summary(glm.bayes)
+densplot(glm.bayes)
+```
+
+Once we have the posteriory density functions for every parameter, we can make punctual predictions using the mean of each random variable and computing the logistic function:
+
+$$ y_{prediction} = {1\over1+e^{-X\beta}} $$
+We set the threshold to an arbitrary number of *0.50*, which decides the corresponding class for a given prediction. This value can also be optimized when looking for a more balanced model, but we will not focus on that subject.
+
+
+
+```{r}
+X_new <- cbind(1,X_test[,c(1,2,5,6,7)]) # Order the design matrix
+beta_means <- summary(glm.bayes)$statistics[,1]
+
+# Vector multiplication
+z = as.matrix(X_new) %*% as.matrix(beta_means)
+y_pred <- 1/(1+exp(-z))
+
+# Hit matrix and hit ratio (Ridge model 1-se)
+H <- table(y_pred> 0.5, y_test == 1) 
+H
+
+tp = H[2,2]
+tn = H[1,1]
+fp = H[2,1]
+fn = H[1,2]
+total = tp+tn+fp+fn
+
+acc = (tp+tn)/total
+rec = (tp)/(tp+fp)
+pre = (tp)/(tp+fn)
+F1 = 2*rec*pre/(pre+rec)
+
+print(paste('Accuracy: ',acc ))
+print(paste('Recall: ', rec))
+print(paste('Precision: ',pre))
+print(paste('F1-score: ',F1 ))
+
+D = freq_glm$deviance
+D0 = freq_glm$null.deviance
+
+print(paste('R2: ', 1-D/D0 ))
+```
+The results of this model are really similar from the obtained before, both in predictions and in model parameters (in terms of means). This is reasonable, as we have not defined any prior density, and the values captured by the model are just the data. However, the Bayesian model offers the flexibility of giving a density as output, so we can estimate the prediction using means, median and even quantiles.
+
+## Informative prior
+
+To detail the prior density function, we will use some medical insights to try to deduce *a priori* the parameters of the model. For constructing the priors, we have taken the following steps:
+
+  * For variables which are positively correlated with diabetes, a flat exponential is set. This seeks to assign prior probabilities only to the positive values. Those variables are: *Pregrancies, Glucose, BMI, Diabetes predigree*.
+  * For variables with negative correlation, we set the exponential of $(-x_{j})$, which assign prior probabilities to negative values only. Those variables are: *Insulin*.
+  * For variables with no prior, we set the typical Gaussian with high variance.
+  
+The joint density function is set as the multiplication of all the corresponding densities, this assumes independence (which is not entirely true, but works as prior).
+
+The same parameters as the previous case had been used for the MCM chain.
+
+```{r}
+n_iter <- 120000
+thinning <- 30
+burning <- 30000
+
+
+logprior <- function(beta){
+
+         dnorm(beta[1],sd=500)* #The intercept is neutral, we do not have prior
+         dexp(beta[2],rate=.1)*
+         dexp(-beta[3],rate=.1)*
+         dexp(beta[4],rate=.1)*
+         dexp(beta[5],rate=.1)
+
+}
+
+#Informative prior
+glm.bayes2 <- MCMClogit(Outcome ~ Pregnancies + Glucose + Insulin + BMI +  DiabetesPedigreeFunction, 
+                      data=diabetes_train,
+                      thin=thinning,
+                      mcmc=n_iter,
+                      burnin=burning,
+                      user.prior.density=logprior)
+```
+
+
+```{r}
+summary(glm.bayes2)
+```
+
+```{r}
+beta_means <- summary(glm.bayes2)$statistics[,1]
+z = as.matrix(X_new) %*% as.matrix(beta_means)
+y_pred <- 1/(1+exp(-z))
+
+# Hit matrix and hit ratio (Ridge model 1-se)
+H <- table(y_pred> 0.5, y_test == 1) 
+H
+
+tp = H[2,2]
+tn = H[1,1]
+fp = H[2,1]
+fn = H[1,2]
+total = tp+tn+fp+fn
+
+acc = (tp+tn)/total
+rec = (tp)/(tp+fp)
+pre = (tp)/(tp+fn)
+F1 = 2*rec*pre/(pre+rec)
+
+print(paste('Accuracy: ',acc ))
+print(paste('Recall: ', rec))
+print(paste('Precision: ',pre))
+print(paste('F1-score: ',F1 ))
+
+D = freq_glm$deviance
+D0 = freq_glm$null.deviance
+
+print(paste('R2: ', 1-D/D0 ))
+```
+
+
+The results remain very similar between the different Bayesian models and the frequentist models, this might be happening as the data is to strong, and is vanishing the weak priors that are fed to the model. 
+
+# Conclusions
+
+After performing several models for this data set, we have concluded:
+
+  1- For defining a useful Bayesian model it is key to have realistic and confident prior estimations about the model parameters. If that is not the case, the model ends up with very similar predictions as the frequentist model.
+  
+  
+  2- One of the benefits of using Bayesian models, is the flexibility of having a density function for every parameter, which allows many different predictions and even non-fixed predictions of the target variable.
+  
+  
+  3- For generalized linear models, Bayesian model selection is not well deployed yet. The best option in this case, it to perform model selection on the frequentist paradigm (by doing Lasso, stepwise, etc.) and then compute the Bayesian model with those selected variables.
+  
+  
+  4- Models for this data set are performing poorly, with moderate accuracy (majority class is about 66 %) and very low precision. One cause for this problem, might be the unbalanced problem of the target variable. For optimizing this problem, *F1 score* could be tuned setting the right threshold.
+
+
+
+
+
+
